@@ -1,0 +1,11 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: example
+  namespace: default
+spec:
+  taskRef:
+    name: example-task
+  params:
+    - name: appName
+      value: test-app
