@@ -1,0 +1,22 @@
+﻿apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: check-deployment-exist
+spec:
+  params:
+    - default: sample
+      description: Deployment Name
+      name: appname
+      type: string
+    - description: Namespace Name
+      name: namespace
+      type: string
+  results:
+    - description: '0 is null, 1 is existed'
+      name: existed-num
+  steps:
+    - image: 'image-registry.openshift-image-registry.svc:5000/openshift/cli:latest'
+      name: check-deployment
+      resources: {}
+      script: >
+        oc get deploy $(inputs.params.appname) -n $(inputs.params.namespace) | grep $(inputs.params.appname) | wc -l | tr -d "\n" | tee $(results.existed-num.path)

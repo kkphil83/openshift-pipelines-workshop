@@ -1,0 +1,47 @@
+﻿apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: petclinic
+spec:
+  params:
+    - description: The git repository url
+      name: git-repo-url
+    - default: main
+      description: The git revision
+      name: git-revision
+    - description: The name of the deployment to be created / patched
+      name: git-repo-name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: s2i-java-deployment-$(tt.params.git-repo-name)-
+      spec:
+        params:
+          - name: APP_NAME
+            value: $(tt.params.git-repo-name)
+          - name: TARGET_NAMESPACE
+            value: app-1
+          - name: GIT_REPO
+            value: $(tt.params.git-repo-url)
+          - name: GIT_REVISION
+            value: $(tt.params.git-revision)
+          - name: IMAGE_NAME
+            value: >-
+              image-registry.openshift-image-registry.svc:5000/app-1/$(tt.params.git-repo-name)
+          - name: PATH_CONTEXT
+            value: .
+          - name: VERSION
+            value: openjdk-11-ubi8
+        pipelineRef:
+          name: s2i-java-deployment-petclinic
+        serviceAccountName: pipeline
+        workspaces:
+          - name: workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 1Gi

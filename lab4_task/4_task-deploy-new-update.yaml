@@ -1,0 +1,77 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy-new-update
+spec:
+  params:
+    - default: app-dev
+      name: NAMESPACE
+      type: string
+    - default: app-dev
+      name: ROUTE_NAME
+      type: string
+    - default: dev-blue
+      name: BLUE_DEPLOY
+      type: string
+    - default: dev-green
+      name: GREEN_DEPLOY
+      type: string
+    - default: dev-blue
+      name: CONTAINER_NAME
+      type: string
+    - default: 'image-registry.openshift-image-registry.svc:5000/app-1/petclinic'
+      name: IMAGE_NAME
+      type: string
+    - default: latest
+      name: CONTAINER_TAG
+      type: string
+  results:
+    - description: current blue weight value
+      name: blue-route-value
+    - description: current green weight value
+      name: green-route-value
+  steps:
+    - image: 'image-registry.openshift-image-registry.svc:5000/openshift/cli:latest'
+      name: check-route-value
+      resources: {}
+      script: >
+        #!/usr/bin/env bash
+
+        ## check route weight value
+
+        oc project $(params.NAMESPACE)
+
+        oc get route $(params.ROUTE_NAME) -o jsonpath='{.spec.to.weight}' | tee
+        $(results.blue-route-value.path)
+
+        oc get route $(params.ROUTE_NAME) -o
+        jsonpath='{.spec.alternateBackends[*]}' | awk -F':' '{print $4}' | sed
+        's/}//' | tee $(results.green-route-value.path)
+
+        BLUE_VALUE=$(cat $(results.blue-route-value.path))
+
+        GREEN_VALUE=$(cat $(results.green-route-value.path))
+
+        echo ""
+         
+        if [ "${BLUE_VALUE}" == "100" ]; then
+
+          echo "Change the image of deployment green to a new image"
+
+          oc scale deploy/$(params.GREEN_DEPLOY) --replicas=1
+
+          echo oc set image deploy/$(params.GREEN_DEPLOY) $(params.CONTAINER_NAME)=$(params.IMAGE_NAME):$(params.CONTAINER_TAG)
+
+          oc set image deploy/$(params.GREEN_DEPLOY) $(params.CONTAINER_NAME)=$(params.IMAGE_NAME):$(params.CONTAINER_TAG)
+
+        else
+
+          echo "Change the image of deployment blue to a new image"        
+
+          oc scale deploy/$(params.BLUE_DEPLOY) --replicas=1
+
+          echo oc set image deploy/$(params.BLUE_DEPLOY) $(params.CONTAINER_NAME)=$(params.IMAGE_NAME):$(params.CONTAINER_TAG)
+
+          oc set image deploy/$(params.BLUE_DEPLOY) $(params.CONTAINER_NAME)=$(params.IMAGE_NAME):$(params.CONTAINER_TAG)
+
+        fi

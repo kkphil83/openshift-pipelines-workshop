@@ -1,0 +1,76 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: change-route-weight
+spec:
+  params:
+    - default: app-dev
+      name: NAMESPACE
+      type: string
+    - default: dev-bluegreen
+      name: ROUTE_NAME
+      type: string
+    - default: dev-blue
+      name: SERVICE_BLUE
+      type: string
+    - default: dev-green
+      name: SERVICE_GREEN
+      type: string
+  results:
+    - description: current blue weight value
+      name: blue-route-value
+    - description: current green weight value
+      name: green-route-value
+    - description: current weight value
+      name: route-value
+  steps:
+    - image: 'image-registry.openshift-image-registry.svc:5000/openshift/cli:latest'
+      name: change-route-value
+      resources: {}
+      script: >
+        #!/usr/bin/env bash
+
+        ## check route weight value
+
+        oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME) -o
+        jsonpath='{.spec.to.weight}' | tee $(results.blue-route-value.path)
+
+        oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME) -o
+        jsonpath='{.spec.alternateBackends[*]}' | awk -F':' '{print $4}' | sed
+        's/}//' | tee $(results.green-route-value.path)
+
+        BLUE_VALUE=$(cat $(results.blue-route-value.path))
+
+        GREEN_VALUE=$(cat $(results.green-route-value.path))
+
+        echo ""
+         
+        if [ "${BLUE_VALUE}" == "100" ]; then
+
+          echo "Start to change Green Route 10%"
+
+          oc -n $(params.NAMESPACE) patch route $(params.ROUTE_NAME) -p '{"spec":{"alternateBackends": [{"name": "$(params.SERVICE_GREEN)","weight": 10}],"to": {"name": "$(params.SERVICE_BLUE)", "weight": 90}}}'
+
+          oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME)
+
+          # after 2min
+          sleep 120
+
+          echo "Start to change Green Route 100%"
+          oc -n $(params.NAMESPACE) patch route $(params.ROUTE_NAME) -p '{"spec":{"alternateBackends": [{"name": "$(params.SERVICE_GREEN)","weight": 100}],"to": {"name": "$(params.SERVICE_BLUE)", "weight": 0}}}'
+
+        else
+          echo "Start to change Blue Route 10%"        
+          
+          oc -n $(params.NAMESPACE) patch route $(params.ROUTE_NAME) -p '{"spec":{"alternateBackends": [{"name": "$(params.SERVICE_GREEN)","weight": 90}],"to": {"name": "$(params.SERVICE_BLUE)", "weight": 10}}}'
+
+          oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME)
+
+          # after 2min
+          sleep 120
+
+          echo "Start to change Blue Route 100%"
+          oc -n $(params.NAMESPACE) patch route $(params.ROUTE_NAME) -p '{"spec":{"alternateBackends": [{"name": "$(params.SERVICE_GREEN)","weight": 0}],"to": {"name": "$(params.SERVICE_BLUE)", "weight": 100}}}'
+        fi
+
+        oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME)

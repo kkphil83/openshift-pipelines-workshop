@@ -1,0 +1,69 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  annotations:
+    description: |
+      Reduce the number of unused pods
+  name: change-pod-replicas
+spec:
+  params:
+    - default: app-dev
+      name: NAMESPACE
+      type: string
+    - default: dev-bluegreen
+      name: ROUTE_NAME
+      type: string
+    - default: dev-blue
+      name: BLUE_APP
+      type: string
+    - default: dev-green
+      name: GREEN_APP
+      type: string
+  results:
+    - description: current blue weight value
+      name: blue-route-value
+    - description: current green weight value
+      name: green-route-value
+    - description: specify what to deploy
+      name: target-deployment
+  steps:
+    - image: 'image-registry.openshift-image-registry.svc:5000/openshift/cli:latest'
+      name: check-route-value
+      resources: {}
+      script: >
+        #!/usr/bin/env bash
+  
+        oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME) -o
+        jsonpath='{.spec.to.weight}' | tee $(results.blue-route-value.path)
+        
+        oc -n $(params.NAMESPACE) get route $(params.ROUTE_NAME) -o
+        jsonpath='{.spec.alternateBackends[*]}' | awk -F':' '{print $4}' | sed
+        's/}//' | tee $(results.green-route-value.path)
+  
+        ## weight value
+  
+        BLUE_VALUE=$(cat $(results.blue-route-value.path))
+  
+        GREEN_VALUE=$(cat $(results.green-route-value.path))
+  
+        if [ "${BLUE_VALUE}" == "100" ]; then
+          echo "The Blue Weight is 100%, Need to change the replicas of blue to count 3 "
+ 
+          oc -n $(params.NAMESPACE) scale deployment/$(params.BLUE_APP) --replicas=3
+          oc -n $(params.NAMESPACE) scale deployment/$(params.GREEN_APP) --replicas=0
+ 
+          oc  -n $(params.NAMESPACE) get deployment $(params.BLUE_APP) $(params.GREEN_APP)
+  
+        elif [ "${GREEN_VALUE}" == "100" ]; then
+          echo "The Green Weight is 100%, Need to change the replicas of green to count 3 "
+ 
+          oc -n $(params.NAMESPACE) scale deployment/$(params.BLUE_APP) --replicas=0
+          oc -n $(params.NAMESPACE) scale deployment/$(params.GREEN_APP) --replicas=3
+ 
+          oc  -n $(params.NAMESPACE) get deployment $(params.BLUE_APP) $(params.GREEN_APP)
+  
+        else
+          echo ""
+          echo "Double check the weight of the route"
+  
+        fi

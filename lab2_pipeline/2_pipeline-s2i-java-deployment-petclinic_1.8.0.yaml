@@ -1,0 +1,204 @@
+﻿apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: s2i-java-deployment-petclinic
+  labels:
+    pipeline.openshift.io/runtime: java
+    pipeline.openshift.io/type: kubernetes
+spec:
+  params:
+    - name: APP_NAME
+      type: string
+    - name: TARGET_NAMESPACE
+      type: string
+    - name: GIT_REPO
+      type: string
+    - name: GIT_REVISION
+      type: string
+    - name: IMAGE_NAME
+      type: string
+    - default: .
+      name: PATH_CONTEXT
+      type: string
+    - default: openjdk-11-ubi8
+      name: VERSION
+      type: string
+  tasks:
+    - name: fetch-repository
+      params:
+        - name: url
+          value: $(params.GIT_REPO)
+        - name: revision
+          value: $(params.GIT_REVISION)
+        - name: subdirectory
+          value: ''
+        - name: deleteExisting
+          value: 'true'
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: workspace
+    - name: get-build-id
+      runAfter:
+        - fetch-repository
+      taskRef:
+        kind: Task
+        name: generate-build-id
+    - name: check-deployment-exist
+      params:
+        - name: appname
+          value: $(params.APP_NAME)
+        - name: namespace
+          value: $(params.TARGET_NAMESPACE)
+      runAfter:
+        - get-build-id
+      taskRef:
+        kind: Task
+        name: check-deployment-exist
+    - name: build
+      params:
+        - name: IMAGE
+          value: '$(params.IMAGE_NAME):$(tasks.get-build-id.results.build-id)'
+        - name: TLSVERIFY
+          value: 'false'
+        - name: PATH_CONTEXT
+          value: $(params.PATH_CONTEXT)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: MAVEN_CLEAR_REPO
+          value: 'true'
+      runAfter:
+        - check-deployment-exist
+      taskRef:
+        kind: ClusterTask
+        name: s2i-java
+      workspaces:
+        - name: source
+          workspace: workspace
+    - name: latest-tag
+      params:
+        - name: srcImageURL
+          value: 'docker://$(params.IMAGE_NAME):$(tasks.get-build-id.results.build-id)'
+        - name: destImageURL
+          value: 'docker://$(params.IMAGE_NAME):latest'
+        - name: srcTLSverify
+          value: 'false'
+        - name: destTLSverify
+          value: 'false'
+      runAfter:
+        - build
+      taskRef:
+        kind: ClusterTask
+        name: skopeo-copy
+      workspaces:
+        - name: images-url
+          workspace: workspace
+    - name: deploy-new-app
+      params:
+        - name: SCRIPT
+          value: >-
+            oc apply -f /workspace/output/deployment-ocp/deploy-pipelines.yaml
+            -n $(params.TARGET_NAMESPACE)
+      runAfter:
+        - latest-tag
+      taskRef:
+        kind: Task
+        name: oc-workspace
+      when:
+        - input: $(tasks.check-deployment-exist.results.existed-num)
+          operator: in
+          values:
+            - '0'
+      workspaces:
+        - name: output
+          workspace: workspace
+    - name: create-route
+      params:
+        - name: SCRIPT
+          value: oc expose service $(params.APP_NAME) -n $(params.TARGET_NAMESPACE)
+      runAfter:
+        - deploy-new-app
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      when:
+        - input: $(tasks.check-deployment-exist.results.existed-num)
+          operator: in
+          values:
+            - '0'
+    - name: new-status
+      params:
+        - name: SCRIPT
+          value: >-
+            echo '## Pod Info'
+
+            oc get pod -n $(params.TARGET_NAMESPACE) | grep $(params.APP_NAME)
+
+            echo ' '
+
+            echo '## Service Info'
+
+            oc get svc -n $(params.TARGET_NAMESPACE) | grep $(params.APP_NAME)
+
+            echo ' '
+
+            echo '## Route Info'
+
+            oc get route  -n $(params.TARGET_NAMESPACE) | grep
+            $(params.APP_NAME)
+      runAfter:
+        - create-route
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      when:
+        - input: $(tasks.check-deployment-exist.results.existed-num)
+          operator: in
+          values:
+            - '0'
+    - name: deploy-rolling-update
+      params:
+        - name: SCRIPT
+          value: >-
+            oc set image deploy/$(params.APP_NAME)
+            $(params.APP_NAME)=$(params.IMAGE_NAME):$(tasks.get-build-id.results.build-id)
+            -n $(params.TARGET_NAMESPACE)
+      runAfter:
+        - latest-tag
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      when:
+        - input: $(tasks.check-deployment-exist.results.existed-num)
+          operator: in
+          values:
+            - '1'
+    - name: rolloutstatus
+      params:
+        - name: SCRIPT
+          value: >-
+            echo '## rollout status'
+
+            oc rollout status deploy/$(params.APP_NAME) -n
+            $(params.TARGET_NAMESPACE)
+
+            echo ' '
+
+            echo '## Route Info'
+
+            oc get route  -n $(params.TARGET_NAMESPACE) | grep
+            $(params.APP_NAME)
+      runAfter:
+        - deploy-rolling-update
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      when:
+        - input: $(tasks.check-deployment-exist.results.existed-num)
+          operator: in
+          values:
+            - '1'
+  workspaces:
+    - name: workspace
